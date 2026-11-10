@@ -1,25 +1,28 @@
 ---
 name: longtask
-description: Plans a task too large for one context window by splitting it into independently verifiable sessions, and bootstraps a .longtask/ handoff space in the project. Use when the user asks to plan a long task, mentions session handoff or long-task planning, reports losing information to context compaction, or invokes /longtask.
-compatibility: Requires write access to the project root. Language and framework agnostic.
+description: Plans a task too large for one context window by splitting it into independently verifiable sessions, and bootstraps a .longtask/ handoff space. Use when the user asks to plan a long task, mentions session handoff or long-task planning, reports losing information to context compaction, or invokes /longtask. Do not use for single-session tasks, exploratory work with no verifiable deliverable, or requirements still in flux.
+compatibility: Filesystem read/write recommended. Shell, Git, subagents and slash commands are optional and degrade gracefully. Language and framework agnostic.
 metadata:
   author: songjiahao
-  version: "1.0"
+  version: "1.1"
   updated: "2026-11-10"
-disable-model-invocation: true
 ---
 
 # 长任务模式
 
 上下文压缩会丢信息，会话切换会断线。这个 skill 用两件事解决它：**开工前把任务切成多个可独立验收的会话**，**在项目里留一个跨会话的交接空间**。
 
-它只覆盖「规划阶段」；「协议阶段」由写进项目 `AGENTS.md` 的常驻指令执行——那不是 skill 调用。
+## 定位
+
+longtask 是**面向通用 Agent 的 Skill**，不是某个平台的专属工作流。它不假设运行环境一定具备自动加载项目指令、斜杠命令、文件读写、Shell、Git 或 subagent 能力——这些是平台能力，启动时检测，缺失时按 [`references/protocol.md`](references/protocol.md) §1 降级，并如实记录「未执行」。
+
+规划阶段由本文件负责；执行阶段由项目内 `.longtask/PROTOCOL.md` 的平台无关协议负责。平台适配文件（如 `AGENTS.md`）只负责让新会话读取协议，**不复制协议正文**。
 
 ## 何时使用
 
 - 任务预计跨多个上下文窗口，或已经历过一次压缩
 - 用户提到会话交接、上下文丢失、长任务规划
-- 用户显式调用 `/longtask`
+- 用户显式调用 `/longtask`（平台支持时），或用自然语言提出同样的请求
 
 ## 何时退出
 
@@ -33,72 +36,130 @@ disable-model-invocation: true
 
 ## 工作流
 
-### 1. 探索——消除切分的不确定性
+### 1. 能力检测
 
-**不许凭用户的描述直接切。** 切分依据是「未知」，而未知在哪取决于项目形态。
+先确认运行环境能做什么，结果写入 `PLAN.md` 的「能力与降级」：
 
-- **存量项目**：有预算地读 5–10 个关键文件、跑一次现有的构建或测试。不要漫游。
-- **绿地项目（空仓库）**：没有代码可读，探索需求边界（做到什么程度算完）、技术选型（语言 / 框架 / 依赖，每条带理由）、目录与模块骨架。绿地不设探索预算，成本本就接近零。
+| 能力 | 不可用时 |
+|---|---|
+| 读取项目文件 | 请用户粘贴内容或授予访问；关键文件无法读取时停止 |
+| 写入项目文件 | 输出完整文件内容请用户保存；**不得声称已写入** |
+| Shell 执行 | 生成命令，由用户执行并回报退出码与输出 |
+| Git | 用文件清单和用户提供的版本信息替代 |
+| 自动加载项目指令 | 使用兜底启动语 |
+| Subagent | 主 Agent 顺序执行 |
+| 斜杠命令 | 自然语言触发或平台指定方式 |
 
-**结论必须落盘**到 `PLAN.md` 的「现状与约束」。理由：代码只告诉你「是什么」，永远不告诉你「为什么不是别的」。选型的理由、被否掉的方案、已知的坑，无法从代码重建，不写就永久丢失。
+**能力缺失时必须降级，不能把「计划执行」描述成「实际执行并验证」。** 无法写入任何文件时，跨会话持久化不成立，明确告诉用户。
 
-### 2. 切分——产出 `PLAN.md`
+### 2. 探索——消除切分的不确定性
+
+**不许凭用户的描述直接切。** 切分依据是「未知」，未知在哪取决于项目形态。
+
+- **存量项目**：默认读 5–10 个关键文件、跑一次现有构建或测试。这是默认预算，不是硬上限——只要还有影响切分的重大未知就继续；剩下的未知与任务无关就停。
+- **绿地项目**：探索需求边界（做到什么程度算完）、技术选型（语言 / 框架 / 依赖，每条带理由）、目录与模块骨架。
+
+判断探索是否足够：了解项目结构、相关模块、现有约束、关键依赖、已知风险，足以做出有依据的切分。
+
+**结论必须落盘**到 `PLAN.md` 的「现状与约束」和「当前有效决策」。代码只告诉你「是什么」，永远不告诉你「为什么不是别的」。选型理由、被否掉的方案、已知的坑，无法从代码重建，不写就永久丢失。
+
+### 3. 切分——产出 `PLAN.md`
 
 按**可独立验收的交付物**切，不按 token 数切。token 开工前估不准；「这个会话结束时必须交付一个可验证的东西」是能说清的。
 
-每个会话必须**独立可回滚**：即使后续全部不做，已完成的部分仍有价值且不破坏现状。计划超过 5 个会话时，必须在 `PLAN.md` 里回答一次「为什么不能拆成两个独立任务」。
+- **独立可回滚**：即使后续全部不做，已完成的部分仍有价值且不破坏现状。
+- **每条验收检查可执行**：`npm test` 退出码 0、`docs/x.md` 存在且含第 3 章、`curl localhost:3000/health` 返回 200。写不出可执行检查，说明切分错了，退回重切。
+- **标注依赖类型**：`HARD`（必须等前置完成并通过验收）、`SOFT`（可提前做但最终依赖前置）、`NONE`。
+- **会话数量较多时检查任务边界**：例如超过 5 个会话，或存在明显独立业务边界，必须回答「能不能拆成多个独立任务」。5 个只是提醒阈值，不是架构规则。
 
-**每个交付物必须能写出一条可执行的检查**：`npm test` 退出码 0、`docs/x.md` 存在且含第 3 章、`curl localhost:3000/health` 返回 200。写不出可执行检查，说明**切分本身是错的**，退回重切。
+### 4. 落地——建目录、提提案
 
-### 3. 落地——建目录、提提案
+在项目根建 `.longtask/`，写入：
 
-在项目根建 `.longtask/`，写入 `PLAN.md`、`STATE.md` 和 `S01.md` 的空白骨架。三个文件都进 git——它们是有价值的决策记录，不是临时垃圾。
+- `PROTOCOL.md`：从 [`references/protocol.md`](references/protocol.md) 复制，填写任务 ID、协议版本、初始化时间
+- `PLAN.md`：任务目标、完成定义、会话划分、当前有效决策、变更记录
+- `STATE.md`：当前会话 `S01`，状态 `PLANNED`
+- `S01.md`：空白骨架（可选，会话开始时再填）
 
-然后**把常驻指令作为提案交给用户，确认后才写入项目 `AGENTS.md`**。改的是所有未来会话都要读的文件，不确认不写。同时给用户一段**兜底启动语**，防止新会话没加载 `AGENTS.md` 时接不上。
+这些文件是决策记录，默认进 git。
 
-### 4. 检查点
+然后**把常驻指令作为提案交给用户，确认后才写入项目 `AGENTS.md`**（或等价项目指令）。改的是所有未来会话都要读的文件，不确认不写。同时给用户一段**兜底启动语**，防止新会话没加载常驻指令时接不上。
 
-agent 无法预知压缩何时发生，所以「压缩前存盘」做不到。只能：每个检查点覆盖重写 `STATE.md`（三五行，成本可忽略），收尾时再写完整 `S0N.md`。高频轻量兜住意外中断，低频完整兜住正常切会话。
+**若只是模型判断任务可能超长、用户并未要求规划，先征得同意再创建 `.longtask/`。**
 
-**subagent**：鼓励用它做上下文隔离，但**报告不落盘到 `.longtask/` 下的文件，就等于没做**——它只会回到父会话，父会话一压缩就没了。
+### 5. 检查点
 
-### 5. 收尾闸门
+agent 无法预知压缩何时发生，所以「压缩前存盘」做不到。只能：
 
-写 `S0N.md` 之前，六条全过：
+- 每个可验证的小步完成后**覆盖重写 `STATE.md`**（默认 5 行，必要时可加备注行，以能恢复任务为准）
+- 写入采用安全流程：生成完整内容 → 校验必填字段 → 临时文件 + 原子替换（平台支持时）→ 回读校验；不支持原子替换时不得声称已原子写入
+- 收尾时再写完整 `S<nn>.md`
 
-1. `PLAN.md` 里本会话的每条验收检查都**实际执行过**，贴出命令与退出码
-2. 交付物在磁盘上真实存在（`ls` 确认，不是「我记得写了」）
-3. `STATE.md` 已更新为下一会话的起点
-4. `S0N.md` 已写，≤60 行，六节齐全，「下一会话的第一条命令」可直接执行
-5. 若偏离计划，「变更记录」已追加
-6. 用户已确认可以交接
+高频轻量兜住意外中断，低频完整兜住正常切会话。
 
-**任一条不满足，就不许写 `S0N.md`**，改为在 `STATE.md` 里记下「卡在 X、为什么」。
+**subagent**：鼓励用它做上下文隔离，但**报告不落盘到 `.longtask/reports/` 下的文件，就等于没做**——它只会回到父会话，父会话一压缩就没了。只有主 Agent 更新 `STATE.md`。
+
+### 6. 收尾——两阶段交接
+
+不要「先要确认再写交接」：用户得先看到内容才能确认。拆成两阶段：
+
+**阶段 A：准备交接**
+
+1. 实际执行本会话全部验收检查，记录命令、退出码、环境
+2. 确认交付物在磁盘上真实存在
+3. 写 `S<nn>.md`（≤60 行，含验收证据、决策、被否方案、坑、遗留、第一条命令、Git 状态）
+4. 更新 `STATE.md`：保持当前会话编号，状态置 `READY_FOR_HANDOFF`，「下一步」写下一会话的第一条命令
+5. 向用户展示验收结果与交接摘要，明确请求确认
+
+**阶段 B：确认交接**
+
+| 用户反应 | 处理 |
+|---|---|
+| 确认 | `STATE.md` 置 `HANDED_OFF`，本会话结束 |
+| 要求修改实现 | 回到 `IN_PROGRESS`，记录修改点 |
+| 要求修改计划 | 更新 `PLAN.md` 并做影响分析（protocol §7） |
+| 暂缓或外部阻塞 | 置 `BLOCKED`，记录原因 |
+
+必须区分：**实现完成 ≠ 验收通过 ≠ 用户确认交接。** 任一条验收不通过，不许进入 `READY_FOR_HANDOFF`，改为在 `STATE.md` 记录「卡在 X、为什么」。
 
 坏交接比没交接更糟：一份写着「已完成」的半成品，会让下一个会话带着虚假自信开工，错误被放大而不是被发现。
 
-### 6. 开工闸门（新会话）
+### 7. 新会话开工闸门
 
-读到 `S0N.md` 之后、动手之前，**第一条命令就是重跑上一会话的验收检查**。不过就立刻停下报告，不要继续往下做。
+新会话读到 `S<nn>.md` 之后、动手之前：
 
-## Examples
+1. 检查并发（是否已有其他主会话）
+2. **重跑上一会话的验收检查**
+3. 通过才继续；失败则区分代码缺陷、环境差异、外部服务、测试不稳定，按 protocol §8 处理
 
-**触发**：「这个迁移有 20 个文件要改，我怕上下文撑不住。」→ 进入工作流，先做判定。
+缺少交接文件**不等于**上一会话没有成果。以项目文件和 Git 为准，不猜测进度。
 
-**拒绝**：「帮我看看这个仓库怎么组织的。」→ 无明确交付物，明确退出。
+## 授权边界
 
-**交接质量**：一份合格的 `S0N.md` 和一份把它写成流水账的，对比见 [`references/examples.md`](references/examples.md)。
+| 操作 | 策略 |
+|---|---|
+| 创建 `.longtask/` 基础文件 | 用户已要求规划长任务后可自动执行 |
+| 更新 `STATE.md` / 生成交接草稿 | 自动执行 |
+| 修改总体目标或重大技术决策 | 先说明影响，征得确认 |
+| 修改现有项目级 Agent 指令 | 先提案，确认后写入；只追加不覆盖 |
+| 覆盖用户已有文件或未提交成果 | 必须确认 |
+| 删除文件或不可逆操作 | 必须获得明确授权 |
+| 只读探索、常规检查 | 按平台权限与用户任务授权执行 |
 
-## Guidelines
+## 关键原则
 
 - **只写无法从代码重建的东西**：改了哪些文件（git 有）、测试输出（可重跑）、代码结构（可读）、任务背景（`PLAN.md` 有）——一律不写。
-- **`S0N.md` 上限 60 行**：超了就删减，逼自己只留高价值信息。
-- **跨会话边界必须用户确认**：那是不可逆的上下文丢弃动作。
+- **事实权威**：实际文件与 Git > `PLAN.md`（当前有效决策）> `STATE.md`（索引）> `S<nn>.md`（交接记录）。任何单一状态文件都不能替代实际核验。
+- **历史只追加，当前决策可修订**：每次修订必须留变更记录，旧决策移入「已废弃决策」。
+- **不预测压缩**：只有高频游标能兜住意外中断。
 - **不提前做后续会话**：那会让计划失去意义。
-- **不假设压缩可以被预测**：只有高频游标能兜住。
-- **代码与 `S0N.md` 不符时以代码为准**，并在 `S0N.md` 顶部标注「已过期」。
+- **诚实报告能力缺失**：不能执行就生成命令请用户执行，不能声称验证过。
+- **跨会话边界必须用户确认**：那是不可逆的上下文丢弃动作。
+- **代码与 `S<nn>.md` 不符时以代码为准**，并在文件顶部标注「已过期」。
 
 ## 参考文件
 
-- [`references/templates.md`](references/templates.md) — `PLAN.md` / `STATE.md` / `S0N.md` / `AGENTS.md` 常驻指令 / 兜底启动语的完整模板
-- [`references/examples.md`](references/examples.md) — 正反例：合格的 `S0N.md` vs 写成流水账的
+- [`references/protocol.md`](references/protocol.md) — 平台无关核心协议：状态机、两阶段交接、事实权威、安全写入、验收环境、异常恢复、依赖语义、并发、subagent、授权边界
+- [`references/templates.md`](references/templates.md) — `PROTOCOL.md` / `PLAN.md` / `STATE.md` / `S<nn>.md` / `AGENTS.md` 适配器 / 兜底启动语的完整模板
+- [`references/examples.md`](references/examples.md) — 正反例：合格交接、流水账交接、异常恢复、环境差异误判、两阶段确认对话
+- [`adapters/generic.md`](adapters/generic.md) — 通用平台适配：如何把协议接到具体 Agent，以及无自动加载时的手动入口
