@@ -144,8 +144,9 @@ The rule is the same everywhere: **never describe a planned action as an execute
 | File | Written | Size | Purpose |
 |---|---|---|---|
 | `PROTOCOL.md` | once, at planning | — | Platform-agnostic execution protocol, pinned per task with protocol and schema versions |
-| `PLAN.md` | once, then revised with a change log | — | Sole task-level authority: status, goal, completion definition (task-level final acceptance), constraints, environment, authorized rule sources, execution budget, session table with validity, decisions, change log |
-| `STATE.md` | every checkpoint | 5–7 lines | Sole session/handoff authority: session, state, in-flight deliverable, next action, owner, Git baseline, current check |
+| `PLAN.md` | once, then revised with a change log | — | Sole task-level authority: status, goal, completion definition (task-level final acceptance), constraints, environment, authorized rule sources, execution budget, session table with execution status and validity, decisions, change log |
+| `STATE.md` | every checkpoint | 5–7 lines | Sole authority for the currently claimed session and handoff state: session, state, in-flight deliverable, next action, owner, Git baseline, current check |
+| `LOCK` | on claim | — | Atomic ownership record in strict mutual-exclusion mode: task ID, owner ID, timestamps, state, release reason |
 | `S01.md`, `S02.md`, … | once per session close | ≤ 60 lines | Content snapshot: conclusion and evidence, decisions, rejected options, traps, threads, previous verification commands with side effects, next actions, task-level acceptance result, Git status |
 | `reports/S<nn>-<name>.md` | per subagent | — | Subagent report with an explicit permission boundary, so findings survive compaction |
 | `archive/task-<slug>-<date>-<short-id>/` | on archive | — | Read-only historical task records with a unique path; never deleted or overwritten |
@@ -154,7 +155,9 @@ The rule is the same everywhere: **never describe a planned action as an execute
 
 ## Validation
 
-[`references/validation.md`](references/validation.md) defines a three-layer validation model (static checks, protocol simulation, real-agent integration) and a 60-scenario matrix (35 base + 25 safety/concurrency/migration scenarios). After any change to the core protocol, templates or adapters, regress the affected scenarios and record the results. Unexecuted checks are not passes.
+[`references/validation.md`](references/validation.md) defines a three-layer validation model (static checks, protocol simulation, real-agent integration) and a 65-scenario matrix (35 base + 30 safety/concurrency/migration scenarios). After any change to the core protocol, templates or adapters, regress the affected scenarios and record the results.
+
+**Maturity disclosure:** the design and static checks are implemented; the protocol simulation and real-agent integration layers have not been executed in this repository. The matrix lists scenarios, not passed results. Unexecuted checks are not passes.
 
 Run the static layer before committing:
 
@@ -164,13 +167,16 @@ node scripts/validate.mjs
 
 ## Design document
 
-The consolidated design — four review rounds merged into one contract — is in [`docs/longtask-design.md`](docs/longtask-design.md). It includes the final architecture, all core contracts, and a traceability table for every review finding.
+The consolidated design — five review rounds merged into one contract — is in [`docs/longtask-design.md`](docs/longtask-design.md). It includes the final architecture, all core contracts, and a traceability table for every review finding.
 
 ## Design principles
 
-- **Write only what code can't reconstruct.** Git has the diff. Tests can be re-run. The code is readable. What's missing is *why*.
-- **Two authorities, two scopes.** `PLAN.md` is the sole authority for task-level state and the plan; `STATE.md` is the sole authority for the current session and handoff state. Handoff files are snapshots, not live state.
+- **Avoid redundant persistence; keep audit, decisions and recovery.** Don't copy full code, full diffs or large logs. Do persist verification commands, exit codes, key output, environment, Git baseline, open items and recovery information. Record key decisions and rejected options with reasons.
+- **Two authorities, two scopes.** `PLAN.md` is the sole authority for task-level state, historical session execution status and deliverable validity; `STATE.md` is the sole authority for the currently claimed session and handoff state. Handoff files are snapshots.
 - **Facts over files.** Project files and Git outrank any state file. No single state file replaces verification.
+- **State machines are per session.** `HANDED_OFF` / `CANCELLED` terminate the current session's state machine; the next session starts a new instance and never inherits the previous terminal state.
+- **Select planned sessions; don't invent numbers.** Choose the next session from the plan's dependency graph. "Highest number + 1" is only for creating new work, never for selecting an existing session.
+- **Lock owners are verified.** Release or takeover only after checking `ownerId`; a recovered old owner must not delete the new owner's lock.
 - **Task-level acceptance is not session-level acceptance.** The last session must execute the plan's overall completion definition before the task is `COMPLETED`.
 - **History is immutable; revalidation is a new session.** A frozen handoff is never rewritten. Plan changes mark deliverables `REVALIDATION_REQUIRED` and open a rework session.
 - **Append history, revise decisions.** History is append-only; current decisions may change, but every change leaves a record and moves the old decision to "deprecated".
@@ -195,6 +201,9 @@ The consolidated design — four review rounds merged into one contract — is i
 - **Splitting from the user's description alone** — a plan built without reading the code gets overturned by session two.
 - **Duplicating the protocol into `AGENTS.md`** — adapters must point at `PROTOCOL.md`, or versions drift.
 - **Treating the handoff file as live state** — `STATE.md` is the session/handoff authority; the handoff is a snapshot.
+- **Selecting the highest session number** — select planned sessions from the dependency graph; allocate new numbers only for new work.
+- **Deleting a lock you don't own** — verify `ownerId` before release; a recovered old owner stops instead of deleting the new owner's lock.
+- **Using "write only what code can't reconstruct" to drop evidence** — verification commands, exit codes, environment and recovery information must be persisted.
 - **Using local acceptance as task completion** — run the plan's task-level final acceptance.
 - **Rewriting a frozen handoff** — mark revalidation and open a rework session instead.
 - **Letting subagents write task state** — subagents edit assigned project files only; the main agent owns `PLAN.md` / `STATE.md`.
