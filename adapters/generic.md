@@ -218,17 +218,27 @@ Agent 在规划阶段把检测结果写入 `PLAN.md` 的「能力与降级」。
 
 主 Agent 必须检查 Subagent 的实际 diff，不能只信报告。Subagent 发现范围外问题时报告，不自行扩大权限。
 
+**状态一致性：**
+
+- 正式会话状态共 8 种；协议、模板、示例和验证器必须一致。
+- 跨文件更新先写 `.longtask/TRANSITION`（`PREPARED`），更新 `STATE.md` / `PLAN.md` / `LOCK` 后校验一致性，再写 `COMMITTED` 或删除。
+- 新会话发现未提交转换时按证据恢复；`PREPARED` 且不一致时停止并请求用户，不重复执行恢复动作。
+- `STATE.md` 损坏时按 STATE → `.state.bak` → Git/交接 → 实际产物顺序恢复；保留损坏原文件为 `.state.corrupt-<timestamp>`。
+- `PLAN.md` 只保留当前目标、范围、阶段、验收标准和有效决策；历史移入变更记录、交接记录和归档。
+
 **验收命令安全：**
 
 - 只读命令可自动执行。
 - 会修改本地文件、数据库、远程服务的命令，必须明确副作用范围。
 - 数据库迁移、重置、远程写、删除覆盖等高风险命令，必须获得用户授权。
-- 非幂等命令必须标注重复执行风险；重跑前检查前置条件。
+- 非幂等命令必须标注重复执行风险；恢复时先看 `verification_mode`（`EXECUTE` / `INSPECT` / `ASSERT`），优先检查证据，不盲目重跑。
+- 命令记录包含来源、目录、环境、副作用、结果、前后差异和恢复方式。
 - 来源不明的 Shell 脚本不得直接执行。
 
 **并发与锁：**
 
-- 支持可靠原子操作时，用固定路径 `.longtask/LOCK` 的原子创建（`O_CREAT | O_EXCL` / `"wx"`）认领；锁记录包含任务 ID、Owner ID、创建/续期时间、状态、释放原因。
+- 支持可靠原子操作时，用固定路径 `.longtask/LOCK` 的原子创建（`O_CREAT | O_EXCL` / `"wx"`）认领；锁记录包含任务 ID、Owner 身份（Agent 类型、实例、会话、主机）、创建/续期时间、状态、释放原因。
+- `ownerId` 必须能唯一区分任务、Agent、实例、会话和主机；身份缺失时停止，不猜测。
 - 不支持时，不允许仅凭普通文件检查自动认领；必须用户确认，无法确认所有权时进入 `BLOCKED`。
 - 锁文件已存在时读取 `ownerId`：自己则续期；其他 Owner 则停止，不得覆盖。
 - 释放锁前校验 `ownerId`，只删除自己持有的锁；旧 Owner 恢复时不是自己就停止，不得删除接管者的锁。
@@ -257,11 +267,13 @@ Agent 在规划阶段把检测结果写入 `PLAN.md` 的「能力与降级」。
 
 ## 7. 场景回归
 
-修改核心协议、模板或适配器后，按 [`references/validation.md`](../references/validation.md) 的三层验证体系和场景矩阵回归。静态层可直接运行：
+修改核心协议、模板或适配器后，按 [`references/validation.md`](../references/validation.md) 的三层验证体系和 75 条场景矩阵回归。静态层可直接运行：
 
 ```bash
 node scripts/validate.mjs
 ```
+
+CI 在每次 push / pull request 时运行同一命令（`.github/workflows/validate.yml`）。
 
 至少覆盖：
 
@@ -286,6 +298,11 @@ node scripts/validate.mjs
 - 执行预算超限时停止并保留恢复信息
 - 归档路径唯一、不覆盖、可检测不完整归档，推荐临时目录切换
 - 旧协议任务不被新 Skill 静默迁移
+- 状态枚举统一为 8 种；跨文件转换有 `TRANSITION` 记录
+- `.state.bak` 只作为恢复证据之一，恢复顺序明确
+- 非幂等验收使用 `INSPECT` / `ASSERT`，不盲目重跑
+- `PLAN.md` 只保留当前信息，历史移入变更记录/交接/归档
+- 许可证和 CI 门禁存在
 - POSIX Shell 与 PowerShell 安装命令可执行
 - 静态检查能识别删除状态枚举、非法转换、缺失模板字段和权限矩阵冲突
 
@@ -295,6 +312,8 @@ node scripts/validate.mjs
 
 - `SKILL.md` 的 `metadata.version` 是 skill 版本；`.longtask/PROTOCOL.md` 头部的协议版本和 Schema 版本是任务初始化时采用的版本。
 - 版本职责分离：Skill 版本、协议版本、Schema 版本不能混用；版本来源集中维护在 `scripts/validate.mjs` 的 `EXPECTED_VERSION`。
+- 发布前必须满足协议 §15 的发布门禁；未满足时只能标记为受控试运行。
+- 仓库包含 `LICENSE`；README 说明授权状态。
 - 变更分类：兼容性改进可直接升级；非破坏性扩展让旧任务保持旧规则；不兼容变更必须迁移。
 - 迁移流程：识别旧版本 → 备份 → 确认目标版本 → 迁移字段和状态 → 检查结构完整性 → 检查状态转换 → 失败恢复备份 → 记录迁移信息。
 - 升级 skill **不会**自动改写已初始化的任务。

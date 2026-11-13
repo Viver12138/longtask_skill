@@ -18,7 +18,7 @@
 ```markdown
 # longtask 执行协议（实例）
 
-> 协议版本：1.5 · Schema 版本：1 · 来源：longtask skill `references/protocol.md`
+> 协议版本：1.6 · Schema 版本：1 · 来源：longtask skill `references/protocol.md`
 > 任务 ID：<slug> · 任务短 ID：<short-id> · 初始化：YYYY-MM-DD · 初始化 Agent：<name>
 > 本任务采用的执行协议以本文件为准；修改须经用户确认并记录到 PLAN.md 的「变更记录」。
 
@@ -134,6 +134,7 @@
 - 任务状态取值：`PLANNING`、`ACTIVE`、`COMPLETED`、`ARCHIVED`。转换条件见 protocol §3.2。
 - 没有相关信息的章节写「无」或省略可选项，不要为了字段齐全填无意义内容。
 - 禁止把密钥、Token、密码或环境变量值写入本文件。
+- `PLAN.md` 只保留当前目标、范围、阶段、验收标准和仍然有效的关键决策；已完成的会话细节放入 `S<nn>.md`，历史变更放入变更记录，归档材料放入 `archive/`。
 
 ---
 
@@ -159,13 +160,14 @@
 
 约束：
 
-- 状态取值必须是 protocol §3 定义的七种之一。
+- 状态取值必须是 protocol §3 定义的八种之一。
 - 「下一步」必须是可执行动作。「继续实现认证」不合格，`npx jest src/auth/refresh.spec.ts -t "rotation failure"` 合格。
 - 写入采用安全流程：生成完整内容 → 校验必填字段 → 临时文件 + 原子替换（平台支持时）→ 回读校验。平台不支持原子替换时，先备份再覆盖，不得声称已原子写入。
 - 不是交付内容的权威来源：与代码冲突时以代码为准。
 - 不在本文件中记录密钥、Token 或环境变量值。
 - 不记录任务级状态；`PLAN.md` 才是任务级状态的权威。
 - 历史会话执行状态不写在本文件；写入 `PLAN.md` 会话表。
+- 非原子写入时保留 `.state.bak`；恢复后把损坏原文件保留为 `.state.corrupt-<timestamp>`，不要立即删除。
 
 ---
 
@@ -176,7 +178,13 @@
 ```json
 {
   "taskId": "<task-id>",
-  "ownerId": "<owner-id>",
+  "owner": {
+    "agentType": "<agent-type>",
+    "agentInstanceId": "<agent-instance-id>",
+    "sessionId": "<session-id>",
+    "hostId": "<host-or-workspace-id>"
+  },
+  "ownerId": "<agentType>:<agentInstanceId>:<sessionId>@<hostId>",
   "createdAt": "YYYY-MM-DDTHH:MM:SSZ",
   "renewedAt": "YYYY-MM-DDTHH:MM:SSZ",
   "state": "HELD",
@@ -186,6 +194,7 @@
 
 规则：
 
+- `ownerId` 必须能区分任务、Agent 类型、Agent 实例、会话实例和主机/工作区；身份缺失时停止并请求用户。
 - 使用 `O_CREAT | O_EXCL`（Node `fs.open(path, "wx")`、POSIX `set -C` 重定向或平台等价操作）原子创建；创建成功才获得执行权。
 - 文件已存在时读取 `ownerId`：自己则续期；其他 Owner 则停止并报告，不得覆盖。
 - 禁止普通写入覆盖锁文件。
@@ -194,6 +203,33 @@
 - 接管必须用户明确授权，核实原会话，记录原因。
 - 旧 Owner 恢复时必须先校验锁；不是自己就停止，不得删除接管者的锁。
 - 平台不支持原子锁时，使用降级互斥模式：用户确认 + `BLOCKED`，不创建伪锁。
+
+---
+
+## `.longtask/TRANSITION`（跨文件状态转换）
+
+用于识别未完成的多文件状态更新，不是分布式事务。
+
+```json
+{
+  "transitionId": "<unique-id>",
+  "fromState": "<state>",
+  "toState": "<state>",
+  "phase": "PREPARED",
+  "updatedFiles": ["STATE.md", "PLAN.md", "LOCK"],
+  "timestamp": "YYYY-MM-DDTHH:MM:SSZ"
+}
+```
+
+流程：
+
+1. 写 `PREPARED`。
+2. 更新 `STATE.md` / `PLAN.md` / `LOCK`。
+3. 校验文件之间一致性。
+4. 写 `COMMITTED` 或删除 `TRANSITION`。
+5. 新会话启动检查未提交转换；`PREPARED` 且不一致时停止并请求用户，不重复执行恢复动作。
+
+---
 
 ---
 
@@ -229,7 +265,7 @@
 - <文件:行号 或 模块>：<问题 / 待办>
 
 ## 6. 上一会话验收命令
-<按顺序列出；每条标注：副作用分类 / 是否幂等 / 是否需要授权 / 失败恢复方式；必须是可直接粘贴执行的命令>
+<按顺序列出；每条标注：verification_mode（EXECUTE / INSPECT / ASSERT）/ 副作用分类 / 是否幂等 / 前置条件 / 是否需要授权 / 验收证据 / 失败恢复方式；必须是可直接粘贴执行的命令>
 
 ## 7. 后续动作
 - 下一会话第一条工作命令：<验收通过后可直接执行的下一步；最后一个会话写「无」>

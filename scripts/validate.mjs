@@ -41,9 +41,9 @@ const FILES = [
   "scripts/validate.mjs",
 ];
 
-const EXPECTED_VERSION = "1.5";
+const EXPECTED_VERSION = "1.6";
 const BASE_SCENARIOS = 35;
-const T_SCENARIOS = 30;
+const T_SCENARIOS = 40;
 
 const SESSION_STATES = [
   "PLANNED",
@@ -188,7 +188,7 @@ function checkStateMachine() {
     }
   }
 
-  for (const phrase of ["会话状态机以单个会话为作用域", "PLAN 会话执行状态", "计划级事实"]) {
+  for (const phrase of ["会话状态机以单个会话为作用域", "PLAN 会话执行状态", "计划级事实", "正式状态集合共 8 种", "禁止转换"]) {
     if (!protocol.includes(phrase)) report(`protocol.md 缺少状态机约束：${phrase}`);
   }
 
@@ -225,6 +225,12 @@ function checkTemplates() {
     "Schema 版本",
     "short-id",
     "ownerId",
+    "agentInstanceId",
+    "hostId",
+    "TRANSITION",
+    "PREPARED",
+    "COMMITTED",
+    "verification_mode",
     "临时归档目录",
   ];
   for (const field of required) {
@@ -320,6 +326,55 @@ function checkValidationCounts() {
 
   if (!validation.includes("三层验证体系")) report("validation.md 缺少三层验证体系");
   if (!validation.includes("NOT_TESTED")) report("validation.md 缺少结果状态枚举");
+  if (!validation.includes("跨平台兼容性矩阵")) report("validation.md 缺少跨平台兼容性矩阵");
+  if (!validation.includes("发布门禁")) report("validation.md 缺少发布门禁");
+}
+
+function checkRepositoryMeta() {
+  if (!exists("LICENSE")) report("缺少 LICENSE");
+  const license = read("LICENSE");
+  if (license !== null && !license.includes("MIT License")) {
+    report("LICENSE 不是预期的 MIT 文本");
+  }
+  if (!exists(".github/workflows/validate.yml")) {
+    report("缺少 CI 工作流 .github/workflows/validate.yml");
+  }
+  const readme = read("README.md");
+  if (readme !== null && !readme.includes("License")) {
+    report("README.md 缺少许可证说明");
+  }
+  if (!exists("docs/longtask-design.md")) report("缺少设计文档");
+}
+
+function checkNewContracts() {
+  const protocol = read("references/protocol.md");
+  if (protocol !== null) {
+    for (const phrase of ["TRANSITION", "verification_mode", "agentInstanceId", "hostId", "发布门禁"]) {
+      if (!protocol.includes(phrase)) report(`protocol.md 缺少新契约：${phrase}`);
+    }
+  }
+
+  const templates = read("references/templates.md");
+  if (templates !== null) {
+    for (const phrase of ["TRANSITION", "verification_mode", "agentInstanceId", "hostId", "只保留"]) {
+      if (!templates.includes(phrase)) report(`templates.md 缺少新契约：${phrase}`);
+    }
+    if (templates.includes("七种")) report("templates.md 仍写「七种」状态");
+  }
+
+  const design = read("docs/longtask-design.md");
+  if (design !== null) {
+    for (const phrase of ["TRANSITION", "verification_mode", "agentInstanceId", "hostId", "发布门禁", "只保留"]) {
+      if (!design.includes(phrase)) report(`设计文档缺少新契约：${phrase}`);
+    }
+  }
+
+  const skill = read("SKILL.md");
+  if (skill !== null) {
+    for (const phrase of ["TRANSITION", "verification_mode", "agentInstanceId", "hostId", "发布门禁"]) {
+      if (!skill.includes(phrase)) report(`SKILL.md 缺少新契约：${phrase}`);
+    }
+  }
 }
 
 function checkMaturity() {
@@ -369,6 +424,8 @@ function main() {
     checkSessionAndArchiveRules,
     checkValidationCounts,
     checkMaturity,
+    checkRepositoryMeta,
+    checkNewContracts,
     checkStaleTerms,
   ]) {
     check();

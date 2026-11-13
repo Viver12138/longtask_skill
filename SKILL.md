@@ -4,7 +4,7 @@ description: Plans a task too large for one context window by splitting it into 
 compatibility: Filesystem read/write recommended. Shell, Git, subagents and slash commands are optional and degrade gracefully. Language and framework agnostic.
 metadata:
   author: songjiahao
-  version: "1.5"
+  version: "1.6"
   updated: "2026-11-10"
 ---
 
@@ -83,6 +83,10 @@ longtask 是**面向通用 Agent 的 Skill**，不是某个平台的专属工作
 - `PLAN.md`：任务目标、完成定义（任务级最终验收）、会话划分（含每个会话的执行状态和当前有效性）、当前有效决策、变更记录、执行预算；初始任务状态 `PLANNING`
 - `STATE.md`：当前会话 `S01`，状态 `PLANNED`。它是当前会话及交接状态的**唯一权威**；任务级状态以 `PLAN.md` 为准
 - `S01.md`：可选。初始化时可以不创建；S01 开始执行或收尾前创建，进入 `READY_FOR_HANDOFF` 前必须是完整草稿
+- `TRANSITION`：跨文件状态转换意图记录（`PREPARED` / `COMMITTED`），用于识别和恢复半完成更新
+- `.state.bak`：非原子写入备份；恢复时只是证据之一，不是默认真相
+
+**正式会话状态共 8 种**：`PLANNED`、`IN_PROGRESS`、`BLOCKED`、`VERIFYING`、`READY_FOR_HANDOFF`、`HANDED_OFF`、`FAILED`、`CANCELLED`。协议、模板、示例和验证器必须使用同一集合。
 
 这些文件是决策记录，**默认可以纳入 git，但不自动执行 `git commit` / `git push`**。提交前检查敏感信息；密钥、Token、密码和环境变量值不得写入任务记录。公开仓库还要检查业务架构、内部决策、未公开设计、内部地址和未公开漏洞信息。用户明确要求排除的文件不强行纳管。
 
@@ -101,7 +105,8 @@ longtask 是**面向通用 Agent 的 Skill**，不是某个平台的专属工作
 agent 无法预知压缩何时发生，所以「压缩前存盘」做不到。只能：
 
 - 每个可验证的小步完成后**覆盖重写 `STATE.md`**（通常 5–7 行；必要时可加备注，以能恢复任务为准）
-- 写入采用安全流程：生成完整内容 → 校验必填字段 → 临时文件 + 原子替换（平台支持时）→ 回读校验；不支持原子替换时不得声称已原子写入
+- 写入采用安全流程：生成完整内容 → 校验必填字段 → 临时文件 + 原子替换（平台支持时）→ 回读校验；不支持原子替换时先写 `.state.bak` 再覆盖，不得声称已原子写入
+- 跨文件状态转换先写 `.longtask/TRANSITION`（`PREPARED`），更新文件并校验一致性后再写 `COMMITTED`；新会话发现未提交转换时按证据恢复，不重复执行
 - 保持 Git 基线、所有者和变更边界信息有效
 - 收尾时再写完整 `S<nn>.md`
 
@@ -118,9 +123,9 @@ agent 无法预知压缩何时发生，所以「压缩前存盘」做不到。�
 **阶段 A：准备交接**
 
 1. 先将状态置为 `VERIFYING`，再按 protocol §6.1 分类验收命令副作用；高风险命令先获得授权
-2. 实际执行本会话全部**会话级**验收检查，记录命令、退出码、环境、副作用分类、是否幂等
+2. 实际执行本会话全部**会话级**验收检查，记录命令、退出码、环境、副作用分类、`verification_mode`（`EXECUTE` / `INSPECT` / `ASSERT`）、是否幂等和验收证据
 3. 确认交付物在磁盘上真实存在
-4. 写 `S<nn>.md` **草稿**，至少包含：结论与验收证据、关键决策、被否方案、坑、遗留线索、**上一会话验收命令**、**后续动作**（下一会话第一条工作命令 / 任务级最终验收结果 / 最终完成情况 / 是否还有未完成事项）、Git 状态；任务级最终验收结果先写「未到」
+4. 写 `S<nn>.md` **草稿**，至少包含：结论与验收证据、关键决策、被否方案、坑、遗留线索、**上一会话验收命令**（含 `verification_mode`、前置条件、授权、证据、恢复方式）、**后续动作**（下一会话第一条工作命令 / 任务级最终验收结果 / 最终完成情况 / 是否还有未完成事项）、Git 状态；任务级最终验收结果先写「未到」
 5. **若这是最后一个会话**：执行 `PLAN.md` 的**任务级最终验收**；失败则草稿作废，回到 `IN_PROGRESS` / `FAILED`，不得进入 `READY_FOR_HANDOFF`；通过则把结果写入草稿
 6. 更新 `STATE.md`：保持当前会话编号，状态置 `READY_FOR_HANDOFF`，「下一步」写下一会话的第一条工作命令
 7. 向用户展示验收结果与交接摘要，明确请求确认
@@ -146,7 +151,7 @@ agent 无法预知压缩何时发生，所以「压缩前存盘」做不到。�
 
 新会话读到 `S<nn>.md` 之后、动手之前：
 
-1. 按 protocol §3.4 从 `PLAN.md` 会话表选择**已规划会话**；按 §9 认领并校验 `.longtask/LOCK` 的 `ownerId`；无法严格互斥时停止并请求用户确认
+1. 按 protocol §3.4 从 `PLAN.md` 会话表选择**已规划会话**；按 §9 认领并校验 `.longtask/LOCK` 的 `ownerId`（含 `agentInstanceId`、`sessionId`、`hostId`）；无法严格互斥时停止并请求用户确认
 2. 确定当前会话；若 `PLAN.md` 状态是 `COMPLETED` 或 `ARCHIVED`，不要继续旧任务，提示用户归档或新建
 3. 存在多个同等优先级的可执行会话时，请求用户确认，不自行选择
 4. **不要因为存在更大编号就创建新会话**；只有计划变更或新增工作项时才分配新编号
@@ -177,12 +182,20 @@ agent 无法预知压缩何时发生，所以「压缩前存盘」做不到。�
 | 提交或推送 Git | 不自动执行，由用户决定 |
 | 只读探索、常规检查 | 按平台权限与用户任务授权执行 |
 
+**协议文字不能替代工具层授权、沙箱和最小权限。** 危险操作应使用工具层确认点；远程写入、删除、覆盖和数据库变更必须可审计。
+
 ## 关键原则
 
 - **避免重复持久化，但审计、决策和恢复价值优先**：完整代码、完整 diff、大段测试日志不需要复制；但验收命令、退出码、关键输出、执行环境、Git 基线、未完成事项和恢复信息必须持久化；关键设计决策、被否决的方案及原因必须记录。
 - **事实权威**：实际文件与 Git 高于一切状态文件；任务级状态、目标和当前有效决策以 `PLAN.md` 为准，历史会话执行状态和交付物有效性以 `PLAN.md` 会话表为准，当前会话实时状态和交接状态以 `STATE.md` 为准，`S<nn>.md` 只是内容快照。任何单一状态文件都不能替代实际核验。
 - **状态分两层**：任务级只认 `PLAN.md`，会话/交接级只认 `STATE.md`；历史会话执行状态写 `PLAN.md` 会话表，当前会话实时状态写 `STATE.md`。
 - **状态机按会话作用域**：`HANDED_OFF` / `CANCELLED` 终止当前会话状态机；下一会话创建新实例，不继承上一会话终态。
+- **状态枚举唯一**：正式状态共 8 种；协议、模板、示例和验证器使用同一集合。
+- **跨文件更新需要恢复路径**：`PLAN.md` / `STATE.md` / `LOCK` 不是原子更新，必须用 `.longtask/TRANSITION` 记录意图和提交阶段。
+- **备份不是默认真相**：`.state.bak` 只是恢复证据之一，必须由实际产物和验收证据验证；恢复后保留损坏原文件。
+- **非幂等验收不能盲目重跑**：先看 `verification_mode`，优先 `INSPECT` / `ASSERT`；只有幂等或已授权命令才 `EXECUTE`。
+- **PLAN 只保留当前信息**：历史变更、会话细节和归档材料分别放入变更记录、交接记录和 `archive/`。
+- **CI 门禁**：合并前运行 `scripts/validate.mjs`；静态检查通过不等于协议正确，真实 Agent 验证仍需单独记录。
 - **任务级验收独立于会话级**：最后一个会话必须实际执行 `PLAN.md` 的整体完成定义，不能只用局部验收宣布任务完成。
 - **历史记录不改写**：已 `HANDED_OFF` 的交接记录冻结；计划变更后通过 `REVALIDATION_REQUIRED` 和返工会话重新验收，不把原记录改回未完成。
 - **草稿与正式记录分离**：`READY_FOR_HANDOFF` 时是草稿，可重写；用户确认后冻结为正式记录，更正必须追加记录。
@@ -205,8 +218,8 @@ agent 无法预知压缩何时发生，所以「压缩前存盘」做不到。�
 
 ## 参考文件
 
-- [`references/protocol.md`](references/protocol.md) — 平台无关核心协议：会话状态机作用域、PLAN 会话执行状态、任务生命周期、交付物重新验收、会话选择与认领、交接记录生命周期、事实权威与信任边界、安全写入、Git 恢复边界、持久化边界、验收命令安全、敏感信息、异常恢复、严格/降级互斥与锁文件契约、Subagent 权限矩阵、授权边界、完成与归档、版本迁移
-- [`references/templates.md`](references/templates.md) — `PROTOCOL.md` / `PLAN.md` / `STATE.md` / `LOCK` / `S<nn>.md` / `reports/` / `AGENTS.md` 适配器 / 归档目录 / 兜底启动语的完整模板
-- [`references/examples.md`](references/examples.md) — 正反例：避免冗余持久化、异常恢复、环境差异误判、两阶段确认、任务级最终验收、计划变更后重新验收、Subagent 权限、验收命令安全、锁 Owner 校验、会话选择、执行预算、归档与新任务、同文件回滚、版本迁移
-- [`references/validation.md`](references/validation.md) — 三层验证体系与 65 条场景矩阵（35 基础 + 30 补充），修改核心协议后按矩阵回归
+- [`references/protocol.md`](references/protocol.md) — 平台无关核心协议：8 状态与禁止转换、跨文件 `TRANSITION`、备份恢复、命令安全与 `verification_mode`、会话选择与认领、事实权威与信任边界、Git 恢复边界、持久化边界、严格/降级互斥与锁 Owner 身份、Subagent 权限矩阵、完成与归档、版本迁移、发布门禁
+- [`references/templates.md`](references/templates.md) — `PROTOCOL.md` / `PLAN.md` / `STATE.md` / `LOCK` / `TRANSITION` / `S<nn>.md` / `reports/` / `AGENTS.md` 适配器 / 归档目录 / 兜底启动语的完整模板
+- [`references/examples.md`](references/examples.md) — 正反例：避免冗余持久化、异常恢复、环境差异误判、两阶段确认、任务级最终验收、计划变更后重新验收、Subagent 权限、验收命令安全、锁 Owner 校验、会话选择、执行预算、归档与新任务、同文件回滚、版本迁移、跨文件事务、备份恢复、非幂等验收、PLAN 膨胀
+- [`references/validation.md`](references/validation.md) — 三层验证体系与 75 条场景矩阵（35 基础 + 40 补充），含跨平台兼容性矩阵和发布门禁
 - [`adapters/generic.md`](adapters/generic.md) — 通用平台适配：安装、触发、平台加载验证边界、能力降级、执行安全

@@ -146,7 +146,9 @@ The rule is the same everywhere: **never describe a planned action as an execute
 | `PROTOCOL.md` | once, at planning | — | Platform-agnostic execution protocol, pinned per task with protocol and schema versions |
 | `PLAN.md` | once, then revised with a change log | — | Sole task-level authority: status, goal, completion definition (task-level final acceptance), constraints, environment, authorized rule sources, execution budget, session table with execution status and validity, decisions, change log |
 | `STATE.md` | every checkpoint | 5–7 lines | Sole authority for the currently claimed session and handoff state: session, state, in-flight deliverable, next action, owner, Git baseline, current check |
-| `LOCK` | on claim | — | Atomic ownership record in strict mutual-exclusion mode: task ID, owner ID, timestamps, state, release reason |
+| `LOCK` | on claim | — | Atomic ownership record in strict mutual-exclusion mode: task ID, owner identity, timestamps, state, release reason |
+| `TRANSITION` | during cross-file state changes | — | Intent record (`PREPARED` / `COMMITTED`) for multi-file updates, used to detect and recover half-finished transitions |
+| `.state.bak` | before non-atomic writes | — | Previous valid cursor; one recovery evidence source, never the default truth |
 | `S01.md`, `S02.md`, … | once per session close | ≤ 60 lines | Content snapshot: conclusion and evidence, decisions, rejected options, traps, threads, previous verification commands with side effects, next actions, task-level acceptance result, Git status |
 | `reports/S<nn>-<name>.md` | per subagent | — | Subagent report with an explicit permission boundary, so findings survive compaction |
 | `archive/task-<slug>-<date>-<short-id>/` | on archive | — | Read-only historical task records with a unique path; never deleted or overwritten |
@@ -155,9 +157,9 @@ The rule is the same everywhere: **never describe a planned action as an execute
 
 ## Validation
 
-[`references/validation.md`](references/validation.md) defines a three-layer validation model (static checks, protocol simulation, real-agent integration) and a 65-scenario matrix (35 base + 30 safety/concurrency/migration scenarios). After any change to the core protocol, templates or adapters, regress the affected scenarios and record the results.
+[`references/validation.md`](references/validation.md) defines a three-layer validation model (static checks, protocol simulation, real-agent integration) and a 75-scenario matrix (35 base + 40 safety/concurrency/migration scenarios). After any change to the core protocol, templates or adapters, regress the affected scenarios and record the results.
 
-**Maturity disclosure:** the design and static checks are implemented; the protocol simulation and real-agent integration layers have not been executed in this repository. The matrix lists scenarios, not passed results. Unexecuted checks are not passes.
+**Maturity disclosure:** the design and static checks are implemented; the protocol simulation and real-agent integration layers have not been executed in this repository. The matrix lists scenarios, not passed results. Unexecuted checks are not passes. A compatibility matrix in `validation.md` tracks which platforms were actually exercised.
 
 Run the static layer before committing:
 
@@ -165,9 +167,11 @@ Run the static layer before committing:
 node scripts/validate.mjs
 ```
 
+CI runs the same command on every push and pull request (`.github/workflows/validate.yml`).
+
 ## Design document
 
-The consolidated design — five review rounds merged into one contract — is in [`docs/longtask-design.md`](docs/longtask-design.md). It includes the final architecture, all core contracts, and a traceability table for every review finding.
+The consolidated design — six review rounds merged into one contract — is in [`docs/longtask-design.md`](docs/longtask-design.md). It includes the final architecture, all core contracts, and a traceability table for every review finding.
 
 ## Design principles
 
@@ -175,6 +179,11 @@ The consolidated design — five review rounds merged into one contract — is i
 - **Two authorities, two scopes.** `PLAN.md` is the sole authority for task-level state, historical session execution status and deliverable validity; `STATE.md` is the sole authority for the currently claimed session and handoff state. Handoff files are snapshots.
 - **Facts over files.** Project files and Git outrank any state file. No single state file replaces verification.
 - **State machines are per session.** `HANDED_OFF` / `CANCELLED` terminate the current session's state machine; the next session starts a new instance and never inherits the previous terminal state.
+- **One state enum.** There are exactly 8 session states; protocol, templates, examples and the validator use the same set.
+- **Cross-file updates need recovery.** `PLAN.md` / `STATE.md` / `LOCK` are not updated atomically; record intent in `TRANSITION` (`PREPARED` / `COMMITTED`) and recover from evidence.
+- **Backups are not the truth.** `.state.bak` is one recovery evidence source; verify against artifacts, Git and handoffs, and keep the corrupted file after recovery.
+- **Non-idempotent checks are inspected, not rerun.** Declare `verification_mode` (`EXECUTE` / `INSPECT` / `ASSERT`); only idempotent or authorized commands may be re-executed.
+- **Keep `PLAN.md` current.** Current goals, scope, phase, acceptance criteria and active decisions only; move history to the change log, handoffs and archive.
 - **Select planned sessions; don't invent numbers.** Choose the next session from the plan's dependency graph. "Highest number + 1" is only for creating new work, never for selecting an existing session.
 - **Lock owners are verified.** Release or takeover only after checking `ownerId`; a recovered old owner must not delete the new owner's lock.
 - **Task-level acceptance is not session-level acceptance.** The last session must execute the plan's overall completion definition before the task is `COMPLETED`.
@@ -218,3 +227,12 @@ The consolidated design — five review rounds merged into one contract — is i
 - **Reusing `STATE.md` or session numbers for a new task** — archive the old task and start fresh.
 - **File-level rollback over user edits** — use patch hunks; stop when ownership is unclear.
 - **Silently migrating an old task** — report version differences and migrate only with user approval.
+- **Updating only one copy of the state enum** — protocol, templates, examples and validator must agree.
+- **Rerunning a non-idempotent acceptance command** — inspect evidence first; only idempotent or authorized commands are re-executed.
+- **Trusting `.state.bak` blindly** — verify against artifacts, Git and handoffs; keep the corrupted original.
+- **Letting `PLAN.md` grow into a log** — keep current decisions only; move history to the change log, handoffs and archive.
+- **Shipping without a license or CI gate** — include `LICENSE` and run the validator on every change.
+
+## License
+
+MIT — see [`LICENSE`](LICENSE).
