@@ -21,3 +21,6 @@ jobs:
 
       - name: Run validator
         run: node scripts/validate.mjs
+
+      - name: Run validator regression tests
+        run: node --test scripts/validate.test.mjs

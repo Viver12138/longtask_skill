@@ -2,237 +2,83 @@
 
 **English** | [简体中文](README.zh-CN.md)
 
-> Split a long task into independently verifiable sessions, and leave a handoff trail that survives context compaction.
+Split tasks across context windows into verifiable work units. Keep decisions, progress and recovery evidence in `.longtask/`.
 
-An [Agent Skill](https://agentskills.io) — a plain `SKILL.md`, a platform-agnostic protocol, file templates, a validation matrix and adapters. No runtime dependencies; a small static validator lives under `scripts/`.
-
----
-
-## The problem
-
-Long agent tasks fail in two directions:
-
-1. **Compaction eats the reasoning.** You spend an hour working out *why* an approach was rejected; the summary keeps the conclusion, not the reasoning. The next session re-proposes the rejected approach.
-2. **Sessions don't hand off.** A new session has no idea what the previous one finished, so it re-explores the codebase — burning context on the exact work the last session already did.
-
-`longtask` attacks both. Before any work starts it decomposes the task into sessions that each deliver something **independently verifiable**. Then it bootstraps a `.longtask/` directory that every later session reads before touching code.
-
-## How it works
-
-### Phase 1 — Planning (`/longtask`)
-
-- **Judge first.** Three cases exit immediately: the task fits one context window, there is no verifiable deliverable, or requirements are still churning.
-- **Detect capabilities.** File read/write, shell, Git, subagents, atomic locking and auto-loaded project instructions are platform capabilities, not assumptions. Unavailable ones are recorded and degraded explicitly.
-- **Explore with a budget.** 5–10 key files plus one build or test run for an existing codebase; requirements, stack choices and directory skeleton for a greenfield one. Conclusions get written down, never kept only in context.
-- **Split by deliverable, not by token count.** Each session must be independently verifiable and have an identifiable change boundary. Strict independent rollback is *not* assumed by default — it requires a commit strategy, branch or worktree isolation, and the corresponding platform capability.
-- **Scaffold.** Create `.longtask/` with the protocol, the plan, a lightweight cursor and a session handoff draft.
-
-### Phase 2 — Protocol (`.longtask/PROTOCOL.md`)
-
-The execution protocol is **platform-agnostic**; adapters such as `AGENTS.md` only tell a new session to read it.
-
-- Read the protocol, the plan, the cursor and the current session's handoff before doing anything.
-- `STATE.md` is the **sole authority** for the current session and handoff state; `PLAN.md` is the **sole authority** for task-level state and the plan.
-- Rewrite the cursor at every checkpoint, using a safe write (temp file → validate → atomic replace where supported), keeping the Git baseline and change boundary current.
-- Close in **two phases**: write the handoff draft and show its summary, then freeze it only after the user confirms.
-- On a new session, **re-run the previous session's verification commands before setting the new session to `IN_PROGRESS`**, then run the next session's first work command.
-- The **last session** must execute the plan's task-level final acceptance before the task can be marked `COMPLETED`.
-- A plan change never rewrites a frozen handoff; it marks affected deliverables `REVALIDATION_REQUIRED` and opens a rework session (`S<nn>-R<k>`).
-- If a handoff is missing, recover from the actual files and Git state — never guess. S01 is exempt: it has no previous session.
-
-### Session states
-
-`PLANNED → IN_PROGRESS → VERIFYING → READY_FOR_HANDOFF → HANDED_OFF`
-
-With `BLOCKED` and `FAILED` branches. Implementation complete, session-level acceptance, task-level final acceptance and handoff confirmation are four different things.
-
-### Handoff record lifecycle
-
-| Stage | `STATE.md` state | `S<nn>.md` nature | Rewritable |
-|---|---|---|---|
-| Executing / verifying | `IN_PROGRESS` / `VERIFYING` | no valid handoff | — |
-| Preparing handoff | `READY_FOR_HANDOFF` | draft awaiting confirmation | yes |
-| User rejects | `IN_PROGRESS` | old draft void, replaceable | yes |
-| User confirms | `HANDED_OFF` | formal record | frozen |
-
-A formal record is corrected by appending a correction entry, never by silently rewriting history. `INCOMPLETE` and `OVERDUE` are not session states and are not record states.
-
-### Task lifecycle
-
-```text
-PLANNING → ACTIVE → sessions → task-level final acceptance → COMPLETED → ARCHIVED
-```
-
-- **Session-level acceptance** proves the current session's deliverable is valid.
-- **Task-level final acceptance** proves the plan's overall completion definition is met. The last session must run it; local acceptance cannot substitute for it.
-- **Plan change after `HANDED_OFF`**: frozen records stay untouched. The plan table marks affected deliverables `REVALIDATION_REQUIRED`, and a rework session (`S02-R1`) re-runs their acceptance.
-- **Archive**: v1 allows one `ACTIVE` task per project. Archive a completed task to `.longtask/archive/task-<slug>-<YYYYMMDD>-<short-id>/` (never overwrite an existing archive), then initialize a new task from `PLANNING`. A new task never reuses the old `STATE.md` or session numbering.
-
-## Install
-
-The repository root **is** the skill package; there is no nested `longtask/` directory.
-
-POSIX Shell (bash / zsh / sh):
-
-```bash
-git clone https://github.com/Viver12138/longtask_skill.git /tmp/longtask_skill
-mkdir -p ~/.kscc/skills/longtask
-cp -r /tmp/longtask_skill/SKILL.md /tmp/longtask_skill/references /tmp/longtask_skill/adapters ~/.kscc/skills/longtask/
-```
-
-PowerShell:
-
-```powershell
-git clone https://github.com/Viver12138/longtask_skill.git "$env:TEMP\longtask_skill"
-$dest = "$env:USERPROFILE\.kscc\skills\longtask"
-New-Item -ItemType Directory -Force $dest | Out-Null
-Copy-Item -Recurse -Force "$env:TEMP\longtask_skill\SKILL.md" $dest
-Copy-Item -Recurse -Force "$env:TEMP\longtask_skill\references" $dest
-Copy-Item -Recurse -Force "$env:TEMP\longtask_skill\adapters" $dest
-```
-
-POSIX Shell (bash / zsh / sh), project-scoped:
-
-```bash
-mkdir -p .kscc/skills/longtask
-cp -r /tmp/longtask_skill/SKILL.md /tmp/longtask_skill/references /tmp/longtask_skill/adapters .kscc/skills/longtask/
-```
-
-PowerShell, project-scoped:
-
-```powershell
-$dest = ".kscc\skills\longtask"
-New-Item -ItemType Directory -Force $dest | Out-Null
-Copy-Item -Recurse -Force "$env:TEMP\longtask_skill\SKILL.md" $dest
-Copy-Item -Recurse -Force "$env:TEMP\longtask_skill\references" $dest
-Copy-Item -Recurse -Force "$env:TEMP\longtask_skill\adapters" $dest
-```
-
-For other platforms, copy the same three paths into that platform's skills directory. See [`adapters/generic.md`](adapters/generic.md). The install paths above are KSCC-specific; other platforms may use a different directory.
+A platform-independent Agent Skill built from Markdown instructions and templates. Task execution needs no additional runtime. Source maintenance checks use Node.js 20 or later, with no third-party dependencies.
 
 ## Usage
 
-On a platform with slash commands:
+- “Use longtask to plan this cross-module refactor. Do not implement yet.”
+- “Continue until this goal is complete, saving checkpoints for recovery.”
+- “Resume the existing longtask from its current progress.”
 
-```text
-/longtask
-```
+Use `/longtask` only on platforms that support it. Small tasks proceed normally without scaffolding. Research and writing also qualify when they have reviewable deliverables.
 
-Then describe the task. The skill will either plan it or tell you it doesn't need planning.
+**A work unit is not a chat window.** One chat can finish multiple units; after compaction, the same unit can resume. Planning alone does not authorize implementation. Existing authorization to continue does not require a fresh confirmation at every handoff.
 
-On other platforms, describe the long task and ask for longtask planning, or paste the fallback line:
+## Workflow
 
-> This project has an active long task. Read `.longtask/PROTOCOL.md`, `.longtask/PLAN.md` and `.longtask/STATE.md`, then the current session's `S<nn>.md`, before starting. Re-run the previous session's verification commands first, then run the next session's first work command.
+1. Inspect the relevant project and constraints; define scope and overall acceptance.
+2. Split by deliverables, with checks, actual dependencies and change boundaries.
+3. Save a pinned protocol, plan and current cursor.
+4. Checkpoint progress. Verify and draft each handoff before freezing it under user confirmation or applicable prior authorization.
+5. On recovery, establish ownership, inspect artifacts and unfinished operations, then verify required dependencies before proceeding.
+6. Mark completion only after all necessary deliverables and task-level acceptance pass and the final handoff is complete.
 
-## Capability degradation
-
-| Capability | If unavailable |
+| File | Purpose |
 |---|---|
-| Read project files | Ask the user to paste content; stop if key files are unreadable |
-| Write project files | Output full file contents for the user to save; never claim it was written |
-| Shell | Generate commands for the user to run and report exit codes |
-| Git | Use file lists and user-provided version info |
-| Auto-load project instructions | Manual startup line |
-| Subagents | Main agent runs sequentially |
-| Slash commands | Natural-language trigger |
-| Atomic file lock | Best-effort conflict detection only; never claim strict mutual exclusion |
+| `PROTOCOL.md` | Task-pinned rules and versions |
+| `PLAN.md` | Scope, dependencies, historical state, validity, decisions and authorization sources |
+| `STATE.md` | Current unit, progress, next action, owner and baseline |
+| `S01.md`, etc. | Handoff evidence and reasoning; append corrections after freezing |
+| `LOCK` | Ownership record, where reliable atomic creation is available |
+| `TRANSITION`, `transitions/` | Multi-file update intent and before/after evidence; never a business-operation replay queue |
+| `.state.bak` | Last valid backup for non-atomic writes |
+| `reports/` | Optional subagent results |
 
-The rule is the same everywhere: **never describe a planned action as an executed and verified one.**
+Initialize only the first three files. Create other records when needed. Missing write capability means persistence has not been established; unexecuted checks are not passes.
 
-## The `.longtask/` files
+## Install
 
-| File | Written | Size | Purpose |
-|---|---|---|---|
-| `PROTOCOL.md` | once, at planning | — | Platform-agnostic execution protocol, pinned per task with protocol and schema versions |
-| `PLAN.md` | once, then revised with a change log | — | Sole task-level authority: status, goal, completion definition (task-level final acceptance), constraints, environment, authorized rule sources, execution budget, session table with execution status and validity, decisions, change log |
-| `STATE.md` | every checkpoint | 5–7 lines | Sole authority for the currently claimed session and handoff state: session, state, in-flight deliverable, next action, owner, Git baseline, current check |
-| `LOCK` | on claim | — | Atomic ownership record in strict mutual-exclusion mode: task ID, owner identity, timestamps, state, release reason |
-| `TRANSITION` | during cross-file state changes | — | Intent record (`PREPARED` / `COMMITTED`) for multi-file updates, used to detect and recover half-finished transitions |
-| `.state.bak` | before non-atomic writes | — | Previous valid cursor; one recovery evidence source, never the default truth |
-| `S01.md`, `S02.md`, … | once per session close | ≤ 60 lines | Content snapshot: conclusion and evidence, decisions, rejected options, traps, threads, previous verification commands with side effects, next actions, task-level acceptance result, Git status |
-| `reports/S<nn>-<name>.md` | per subagent | — | Subagent report with an explicit permission boundary, so findings survive compaction |
-| `archive/task-<slug>-<date>-<short-id>/` | on archive | — | Read-only historical task records with a unique path; never deleted or overwritten |
+The repository root is the skill package. Copy `SKILL.md`, `references/` and `adapters/` into a `longtask` folder under your platform's configured skills directory. Treat first installation and upgrades separately to preserve existing changes.
 
-`.longtask/` may be version-controlled by default, but longtask **never runs `git commit` or `git push` automatically**. Check for secrets before committing; never write keys, tokens, passwords or environment-variable values into task records.
+See [generic adaptation](adapters/generic.md) for POSIX Shell and PowerShell examples, the minimal package, and a short project loader. No platform-specific path or automatic loading behavior is assumed.
 
-## Validation
+Manual recovery prompt:
 
-[`references/validation.md`](references/validation.md) defines a three-layer validation model (static checks, protocol simulation, real-agent integration) and a 75-scenario matrix (35 base + 40 safety/concurrency/migration scenarios). After any change to the core protocol, templates or adapters, regress the affected scenarios and record the results.
+> Continue this project's longtask. Read `.longtask/PROTOCOL.md`, `.longtask/PLAN.md` and `.longtask/STATE.md`. Follow the pinned protocol to establish ownership, inspect unfinished transitions and artifacts, then resume the current unit or select one whose dependencies are satisfied. Do not blindly repeat operations with side effects.
 
-**Maturity disclosure:** the design and static checks are implemented; the protocol simulation and real-agent integration layers have not been executed in this repository. The matrix lists scenarios, not passed results. Unexecuted checks are not passes. A compatibility matrix in `validation.md` tracks which platforms were actually exercised.
+## Boundaries
 
-Run the static layer before committing:
+- The plan's rule register is an index; it cannot revoke platform-loaded instructions or grant new permissions.
+- Verification can execute commands or review documents and other artifacts against explicit criteria and evidence.
+- Inspect non-idempotent operation results before retrying. Authorization alone does not justify repetition.
+- An agent without ownership does not write shared task state. A file lock does not guarantee isolation during forced takeover.
+- Preserve user edits, essential evidence and frozen history; line-count guidance must not discard recovery information.
+- Existing tasks retain their pinned protocol. Installation does not silently migrate tasks or infer prior authorization.
+- Keep completed records. Authorized archives use `.longtask/archive/task-<slug>-<YYYYMMDD>-<short-id>/` without overwriting existing archives.
 
-```bash
+## Validation and maturity
+
+Run in the source repository:
+
+```sh
 node scripts/validate.mjs
+node --test scripts/validate.test.mjs
 ```
 
-CI runs the same command on every push and pull request (`.github/workflows/validate.yml`).
+Static checks cover entry metadata, encoding, links, state sets, the complete transition allowlist, state projections, essential template fields and permissions. Regression tests verify that the checker rejects invalid inputs. This is not a longtask execution engine and does not prove compliance with every natural-language rule.
 
-## Design document
+The [validation matrix](references/validation.md) describes protocol simulation and real-agent scenarios. **Protocol simulation and cross-platform real-agent integration have not been executed; this remains a controlled trial.** Checker tests are not concurrency, cross-chat recovery or protocol integration tests. CI runs both commands above.
 
-The consolidated design — six review rounds merged into one contract — is in [`docs/longtask-design.md`](docs/longtask-design.md). It includes the final architecture, all core contracts, and a traceability table for every review finding.
+## Documentation
 
-## Design principles
-
-- **Avoid redundant persistence; keep audit, decisions and recovery.** Don't copy full code, full diffs or large logs. Do persist verification commands, exit codes, key output, environment, Git baseline, open items and recovery information. Record key decisions and rejected options with reasons.
-- **Two authorities, two scopes.** `PLAN.md` is the sole authority for task-level state, historical session execution status and deliverable validity; `STATE.md` is the sole authority for the currently claimed session and handoff state. Handoff files are snapshots.
-- **Facts over files.** Project files and Git outrank any state file. No single state file replaces verification.
-- **State machines are per session.** `HANDED_OFF` / `CANCELLED` terminate the current session's state machine; the next session starts a new instance and never inherits the previous terminal state.
-- **One state enum.** There are exactly 8 session states; protocol, templates, examples and the validator use the same set.
-- **Cross-file updates need recovery.** `PLAN.md` / `STATE.md` / `LOCK` are not updated atomically; record intent in `TRANSITION` (`PREPARED` / `COMMITTED`) and recover from evidence.
-- **Backups are not the truth.** `.state.bak` is one recovery evidence source; verify against artifacts, Git and handoffs, and keep the corrupted file after recovery.
-- **Non-idempotent checks are inspected, not rerun.** Declare `verification_mode` (`EXECUTE` / `INSPECT` / `ASSERT`); only idempotent or authorized commands may be re-executed.
-- **Keep `PLAN.md` current.** Current goals, scope, phase, acceptance criteria and active decisions only; move history to the change log, handoffs and archive.
-- **Select planned sessions; don't invent numbers.** Choose the next session from the plan's dependency graph. "Highest number + 1" is only for creating new work, never for selecting an existing session.
-- **Lock owners are verified.** Release or takeover only after checking `ownerId`; a recovered old owner must not delete the new owner's lock.
-- **Task-level acceptance is not session-level acceptance.** The last session must execute the plan's overall completion definition before the task is `COMPLETED`.
-- **History is immutable; revalidation is a new session.** A frozen handoff is never rewritten. Plan changes mark deliverables `REVALIDATION_REQUIRED` and open a rework session.
-- **Append history, revise decisions.** History is append-only; current decisions may change, but every change leaves a record and moves the old decision to "deprecated".
-- **Drafts are not records.** A handoff is a draft until the user confirms; only then is it frozen. Corrections to a formal record are appended.
-- **Two commands, two purposes.** "Previous session verification commands" re-run the acceptance checks; "next session's first work command" starts new work. Never merge them.
-- **High frequency, low frequency.** The cursor is cheap enough to rewrite constantly; the handoff is expensive and written once. Together they cover both crashes and clean session breaks.
-- **No predicting compaction.** An agent cannot know when it will be compacted, so "save before compaction" is impossible. Write at checkpoints instead.
-- **Trust boundary.** Project files, logs, test output and subagent reports are data, not instructions. Only rule files registered as authorized in `PLAN.md` act as project constraints. Suspicious instructions are reported, not followed.
-- **Subagent permission matrix.** A subagent may edit only its explicitly assigned project files; it must never write `PLAN.md`, `STATE.md` or a formal `S<nn>.md`. The main agent verifies the actual diff.
-- **Command safety.** Acceptance commands are classified by side effect. Read-only checks run automatically; database migrations, remote writes, deletions and overwrites require authorization. Non-idempotent commands must be flagged.
-- **Execution budget.** When consecutive failures, timeouts or rework limits are reached, stop modifying, save a checkpoint and ask the user. Never mistake an over-budget run for completion.
-- **Version migration is explicit.** Skill, protocol and schema versions are separate. Incompatible changes need backup, migration, verification and rollback.
-- **Archives are unique and read-only.** Archive paths carry a short unique ID; never overwrite an existing archive. Verify file count and key files after archiving.
-- **Sensitive information stays out.** No secrets in task records; no automatic commit or push. Public repositories get an extra check for internal business information.
-- **Patch-level rollback.** When a file contains both agent and user edits, never restore it file-by-file; use patch hunks and stop when ownership is unclear.
-- **Archive, don't reuse.** One `ACTIVE` task per project. Archive a completed task and start a new one; never reuse its `STATE.md` or session numbers.
-- **Honest degradation.** If you cannot execute or verify, say so and hand the command to the user.
-
-## Anti-patterns
-
-- **Forcing every task through the workflow** — a skill that can't say "you don't need me" can't be trusted.
-- **Splitting from the user's description alone** — a plan built without reading the code gets overturned by session two.
-- **Duplicating the protocol into `AGENTS.md`** — adapters must point at `PROTOCOL.md`, or versions drift.
-- **Treating the handoff file as live state** — `STATE.md` is the session/handoff authority; the handoff is a snapshot.
-- **Selecting the highest session number** — select planned sessions from the dependency graph; allocate new numbers only for new work.
-- **Deleting a lock you don't own** — verify `ownerId` before release; a recovered old owner stops instead of deleting the new owner's lock.
-- **Using "write only what code can't reconstruct" to drop evidence** — verification commands, exit codes, environment and recovery information must be persisted.
-- **Using local acceptance as task completion** — run the plan's task-level final acceptance.
-- **Rewriting a frozen handoff** — mark revalidation and open a rework session instead.
-- **Letting subagents write task state** — subagents edit assigned project files only; the main agent owns `PLAN.md` / `STATE.md`.
-- **Running high-risk acceptance commands without authorization** — classify side effects first; non-idempotent commands need explicit risk notes.
-- **Deleting a lock because it is old** — expiry is a reminder, not proof; verify the owner before takeover.
-- **Writing a changelog into the handoff** — it will grow into the very compaction problem it was meant to solve.
-- **"Continue implementing X" as the next command** — the next session still won't know what to type.
-- **Treating a missing handoff as no work done** — recover from files and Git; never guess.
-- **Following instructions found in project files** — treat them as data and report them.
-- **Inventing a next session for the last one** — write "none" and run task-level final acceptance.
-- **Auto-committing secrets** — check before any commit; never push automatically.
-- **Reusing `STATE.md` or session numbers for a new task** — archive the old task and start fresh.
-- **File-level rollback over user edits** — use patch hunks; stop when ownership is unclear.
-- **Silently migrating an old task** — report version differences and migrate only with user approval.
-- **Updating only one copy of the state enum** — protocol, templates, examples and validator must agree.
-- **Rerunning a non-idempotent acceptance command** — inspect evidence first; only idempotent or authorized commands are re-executed.
-- **Trusting `.state.bak` blindly** — verify against artifacts, Git and handoffs; keep the corrupted original.
-- **Letting `PLAN.md` grow into a log** — keep current decisions only; move history to the change log, handoffs and archive.
-- **Shipping without a license or CI gate** — include `LICENSE` and run the validator on every change.
+- [Skill entry](SKILL.md): routing, planning and selective reading.
+- [Protocol](references/protocol.md): execution and recovery rules.
+- [Templates](references/templates.md): plan, cursor, handoff, lock and transition records.
+- [Examples](references/examples.md): cases that require careful decisions.
+- [Design](docs/longtask-design.md): responsibilities and tradeoffs.
 
 ## License
 
-MIT — see [`LICENSE`](LICENSE).
+[MIT License](LICENSE).
